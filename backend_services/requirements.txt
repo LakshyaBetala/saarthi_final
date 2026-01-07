@@ -1,0 +1,25 @@
+# Core APIs
+fastapi
+uvicorn
+python-dotenv
+requests
+beautifulsoup4
+pillow
+python-multipart
+
+# Vision
+opencv-python-headless
+ultralytics==8.3.130
+
+# Audio + Voice
+gtts
+pywhatkit
+SpeechRecognition
+pydub
+# playsound is excluded because audio plays on the client (browser), not the server (Docker)
+
+# Deep learning
+tensorflow==2.12.0
+torch
+deepface==0.0.93
+setuptools
