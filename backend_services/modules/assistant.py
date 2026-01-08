@@ -1,159 +1,100 @@
-# backend_services/modules/assistant.py
 import time
 from .audio import speak
 from .search import google_search_summary
 from .vision import detect_objects_and_direction
 from .emotion import analyze_emotion
-from .utils import get_camera_url, listen_command
-# DELETED: import pywhatkit (Docker cannot open browsers)
+from .utils import get_camera_url, transcribe_audio_file, get_first_youtube_video
+import wikipedia
 
-def continuous_assistant():
+def process_audio_command(audio_file_path):
     camera_url = get_camera_url()
     
-    # Note: In Docker, listen_command() might fail if it tries to use the server's microphone.
-    # ideally, audio should be sent from the frontend.
-    try:
-        command = listen_command()
-    except Exception as e:
-        print(f"Mic Error: {e}")
-        return {"message": "Microphone unavailable on server."}
+    # 1. Transcribe
+    full_command = transcribe_audio_file(audio_file_path)
+    print(f"🎤 Original: {full_command}")
 
-    # ✅ Skip empty or failed recognition
-    if not command or command.strip() == "":
-        return {"message": "No command detected. Waiting..."}
+    if not full_command:
+        return {"voice_response": "I didn't hear anything."}
 
-    # ✅ Trigger assistant if name is called
-    if any(name in command.lower() for name in ["bharat", "bharath", "barat", "bha"]):
-        for name in ["bharat", "bharath", "barat", "bha"]:
-            command = command.lower().replace(name, "")
-        command = command.strip()
+    # 2. Cleanup: Remove "Bharat" from the start to get the raw intent
+    # Example: "Bharat play believer" -> "play believer"
+    cleaned_command = full_command.lower()
+    for name in ["bharat", "bharath", "barat"]:
+        cleaned_command = cleaned_command.replace(name, "")
+    
+    cleaned_command = cleaned_command.strip()
+    print(f"🧠 Processed: {cleaned_command}")
 
-        # 🎯 OBJECT + EMOTION
-        if "object" in command or "detect" in command or "ahead" in command:
-            result = detect_objects_and_direction(camera_url)
+    # 3. Logic Routing
 
-            object_labels = [obj["name"] for obj in result["objects"]]
-            if object_labels:
-                speak("Objects ahead are " + ", ".join(object_labels))
-                time.sleep(4)
-
-            speak(result["direction"])
-            time.sleep(2)
-
-            return {
-                "action": "Object detection",
-                "objects": object_labels,
-                "direction": result["direction"]
-            }
-
-        # 🔍 SEARCH
-        elif "search" in command:
-            query = command.replace("search", "").strip()
-            speak(f"Searching for {query}")
-            return google_search_summary(query)
-
-        # ▶️ PLAY YOUTUBE (Fixed for Docker)
-        elif "play" in command:
-            song = command.replace("play", "").strip()
-            speak(f"Playing {song} on YouTube")
-            
-            # Docker cannot open a browser. We return the INTENT to the frontend.
-            # The Frontend (React) will handle opening the link.
-            return {
-                "action": "YouTube", 
-                "query": song,
-                "url": f"https://www.youtube.com/results?search_query={song}"
-            }
-
-        # 🛑 STOP
-        elif "stop" in command or "exit" in command:
-            speak("Goodbye!")
-            return {"message": "Assistant stopped."}
-
-        # ❓ UNKNOWN
+    # 🎯 OBJECT + EMOTION
+    if any(w in cleaned_command for w in ["detect", "object", "look", "see"]):
+        vision_result = detect_objects_and_direction(camera_url)
+        emotion_result = analyze_emotion(camera_url)
+        
+        objects = [obj["name"] for obj in vision_result.get("objects", [])]
+        emotion = emotion_result.get("emotion", "neutral")
+        
+        response_text = ""
+        if objects:
+            response_text += f"I see {', '.join(objects)}. "
         else:
-            speak("Command unclear. Please try again.")
-            return {"message": "Unrecognized command."}
+            response_text += "I don't see clear objects. "
+            
+        response_text += vision_result.get("direction", "") + ". "
+        
+        if emotion != "neutral":
+            response_text += f"You look {emotion}."
 
-    # ❌ Not addressed to assistant
-    return {"message": "No assistant trigger word detected."}
+        return {
+            "action": "Vision",
+            "voice_response": response_text,
+            "data": {"objects": objects, "emotion": emotion}
+        }
 
-# backend_services/modules/assistant.py
-import time
-from .audio import speak
-from .search import google_search_summary
-from .vision import detect_objects_and_direction
-from .emotion import analyze_emotion
-from .utils import get_camera_url, listen_command
-# DELETED: import pywhatkit (Docker cannot open browsers)
+    # ▶️ YOUTUBE (Auto-Play First Video)
+    elif "play" in cleaned_command:
+        # "play believer" -> "believer"
+        song = cleaned_command.replace("play", "").strip()
+        
+        # Scrape the FIRST video URL
+        video_url = get_first_youtube_video(song)
+        
+        return {
+            "action": "YouTube",
+            "voice_response": f"Playing {song} on YouTube.",
+            "url": video_url
+        }
+
+    # 🔍 SEARCH (Wikipedia First -> Google Fallback)
+    elif "search" in cleaned_command or "who is" in cleaned_command or "what is" in cleaned_command:
+        query = cleaned_command.replace("search", "").strip()
+        
+        try:
+            # Try Wikipedia (2 sentences)
+            summary = wikipedia.summary(query, sentences=2)
+            # Ensure comma separation if needed (though wiki usually has grammar)
+            voice_text = f"According to Wikipedia, {summary}"
+        except:
+            # Fallback to Google
+            google_res = google_search_summary(query)
+            voice_text = google_res.get("summary", "I couldn't find information on that.")
+
+        return {
+            "action": "Search",
+            "voice_response": voice_text
+        }
+
+    # 🛑 STOP
+    elif "stop" in cleaned_command or "exit" in cleaned_command:
+        return {"action": "Stop", "voice_response": "Goodbye."}
+
+    # ❓ UNKNOWN
+    else:
+        return {
+            "action": "Unknown",
+            "voice_response": "I didn't understand. Say 'Bharat play music' or 'Bharat detect'."
+        }
 
 def continuous_assistant():
-    camera_url = get_camera_url()
-    
-    # Note: In Docker, listen_command() might fail if it tries to use the server's microphone.
-    # ideally, audio should be sent from the frontend.
-    try:
-        command = listen_command()
-    except Exception as e:
-        print(f"Mic Error: {e}")
-        return {"message": "Microphone unavailable on server."}
-
-    # ✅ Skip empty or failed recognition
-    if not command or command.strip() == "":
-        return {"message": "No command detected. Waiting..."}
-
-    # ✅ Trigger assistant if name is called
-    if any(name in command.lower() for name in ["bharat", "bharath", "barat", "bha"]):
-        for name in ["bharat", "bharath", "barat", "bha"]:
-            command = command.lower().replace(name, "")
-        command = command.strip()
-
-        # 🎯 OBJECT + EMOTION
-        if "object" in command or "detect" in command or "ahead" in command:
-            result = detect_objects_and_direction(camera_url)
-
-            object_labels = [obj["name"] for obj in result["objects"]]
-            if object_labels:
-                speak("Objects ahead are " + ", ".join(object_labels))
-                time.sleep(4)
-
-            speak(result["direction"])
-            time.sleep(2)
-
-            return {
-                "action": "Object detection",
-                "objects": object_labels,
-                "direction": result["direction"]
-            }
-
-        # 🔍 SEARCH
-        elif "search" in command:
-            query = command.replace("search", "").strip()
-            speak(f"Searching for {query}")
-            return google_search_summary(query)
-
-        # ▶️ PLAY YOUTUBE (Fixed for Docker)
-        elif "play" in command:
-            song = command.replace("play", "").strip()
-            speak(f"Playing {song} on YouTube")
-            
-            # Docker cannot open a browser. We return the INTENT to the frontend.
-            # The Frontend (React) will handle opening the link.
-            return {
-                "action": "YouTube", 
-                "query": song,
-                "url": f"https://www.youtube.com/results?search_query={song}"
-            }
-
-        # 🛑 STOP
-        elif "stop" in command or "exit" in command:
-            speak("Goodbye!")
-            return {"message": "Assistant stopped."}
-
-        # ❓ UNKNOWN
-        else:
-            speak("Command unclear. Please try again.")
-            return {"message": "Unrecognized command."}
-
-    # ❌ Not addressed to assistant
-    return {"message": "No assistant trigger word detected."}
+    return {}
