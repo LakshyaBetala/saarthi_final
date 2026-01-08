@@ -35,7 +35,8 @@ export function CameraSetup({ onCameraConnected }: CameraSetupProps) {
 
     try {
       const formData = new FormData()
-      formData.append("ip", ipAddress)
+      // ✅ FIX: Backend expects 'url', not 'ip'
+      formData.append("url", ipAddress)
 
       const response = await fetch(`${API_BASE_URL}/set_camera_url`, {
         method: "POST",
@@ -43,6 +44,9 @@ export function CameraSetup({ onCameraConnected }: CameraSetupProps) {
       })
 
       if (!response.ok) {
+        // If the backend sends an error message, try to read it
+        const errorData = await response.json().catch(() => null);
+        console.error("Connection failed:", errorData);
         throw new Error("Failed to connect to camera")
       }
 
